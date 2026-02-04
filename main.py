@@ -1,6 +1,6 @@
 import network, time, ujson, struct
 from machine import Pin, UART, I2C  # Aggiungi UART qui
-
+import ntptime
 import dht
 from pzem import PZEM 
 from umqtt.simple import MQTTClient
@@ -153,6 +153,16 @@ data_sw = {
 # --- MQTT SETUP ---
 client = MQTTClient("esp32_luca", BROKER_IP, user=USER, password=PASS)
 client.set_callback(sub_cb)
+
+try:
+    ntptime.settime()
+    print("Sincronizzazione completata!")
+except Exception as e:
+    print("Errore durante la sincronizzazione:", e)
+
+# 2. Visualizza l'ora attuale (UTC)
+print("Ora attuale :", time.localtime())
+
 
 try:
     client.connect()
