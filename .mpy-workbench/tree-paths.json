@@ -1,0 +1,56 @@
+[
+  {
+    "fullPath": "/README.md",
+    "name": "README.md",
+    "isDir": false,
+    "depth": 0
+  },
+  {
+    "fullPath": "/boot.py",
+    "name": "boot.py",
+    "isDir": false,
+    "depth": 0
+  },
+  {
+    "fullPath": "/ha_mqtt_device.py",
+    "name": "ha_mqtt_device.py",
+    "isDir": false,
+    "depth": 0
+  },
+  {
+    "fullPath": "/lib",
+    "name": "lib",
+    "isDir": true,
+    "depth": 0
+  },
+  {
+    "fullPath": "/lib/ssl.mpy",
+    "name": "ssl.mpy",
+    "isDir": true,
+    "depth": 1
+  },
+  {
+    "fullPath": "/lib/umqtt",
+    "name": "umqtt",
+    "isDir": true,
+    "depth": 1
+  },
+  {
+    "fullPath": "/lib/umqtt/simple.mpy",
+    "name": "simple.mpy",
+    "isDir": false,
+    "depth": 2
+  },
+  {
+    "fullPath": "/main.py",
+    "name": "main.py",
+    "isDir": false,
+    "depth": 0
+  },
+  {
+    "fullPath": "/pzem.py",
+    "name": "pzem.py",
+    "isDir": false,
+    "depth": 0
+  }
+]

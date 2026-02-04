@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "syncId": "60f6089b-e0af-4b06-b8e0-aead35976916",
+  "root": "/home/luca/micropython/sw",
+  "generatedAt": 1770219841705,
+  "files": {
+    "README.md": {
+      "size": 20,
+      "mtime": 1770219133984
+    },
+    "boot.py": {
+      "size": 139,
+      "mtime": 1770136682205
+    },
+    "ha_mqtt_device.py": {
+      "size": 3326,
+      "mtime": 1770136683345
+    },
+    "lib/umqtt/simple.mpy": {
+      "size": 2529,
+      "mtime": 1770051905217
+    },
+    "main.py": {
+      "size": 5645,
+      "mtime": 1770219832417
+    },
+    "pzem.py": {
+      "size": 18972,
+      "mtime": 1770137791765
+    }
+  }
+}
