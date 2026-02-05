@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "syncId": "2d2fe667-d9e9-4538-b9f1-9ae808663b76",
+  "syncId": "d0d0d540-5898-4e29-9976-d7769f207065",
   "root": "/home/luca/micropython/sw",
-  "generatedAt": 1770221701602,
+  "generatedAt": 1770281346367,
   "files": {
     "README.md": {
       "size": 20,
@@ -21,8 +21,8 @@
       "mtime": 1770051905217
     },
     "main.py": {
-      "size": 5883,
-      "mtime": 1770221689126
+      "size": 6209,
+      "mtime": 1770281337004
     },
     "pzem.py": {
       "size": 18972,

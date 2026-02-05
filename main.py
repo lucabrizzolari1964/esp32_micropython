@@ -29,7 +29,7 @@ TOPIC_SW_STATE  = "homeassistant/switch/luca01sw/state"
 TOPIC_SW_SET    = "homeassistant/switch/luca01sw/set"
 
 uart = UART(2, baudrate=9600, tx=17, rx=16)
-pzem = PZEM(uart)
+#pzem = PZEM(uart)
 # Topic e Discovery per la Potenza (W)
 TOPIC_POW_CONFIG = "homeassistant/sensor/luca01p/config"
 TOPIC_POW_STATE  = "homeassistant/sensor/luca01p/state"
@@ -83,7 +83,12 @@ def read_and_publish():
         else:
             print("Pacchetto incompleto ricevuto")
     else:
-        print("PZEM non risponde alla richiesta")
+        print("PZEM non risponde alla richiesta. Provo a riconnetermi")
+        try:
+            pzem = PZEM(uart)
+            print("Conneso a UART")
+        except Exception as e:
+            print("Errore durante la connessione UART:", e)
 
 
 # --- CALLBACK PER RICEZIONE COMANDI ---
@@ -162,6 +167,14 @@ except Exception as e:
 
 # 2. Visualizza l'ora attuale (UTC)
 print("Ora attuale :", time.localtime())
+
+try:
+    pzem = PZEM(uart)
+    print("Conneso a UART")
+except Exception as e:
+    print("Errore durante la connessione UART:", e)
+
+
 
 
 try:
