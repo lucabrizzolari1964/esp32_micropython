@@ -1,220 +1,78 @@
-import network, time, ujson, struct
-from machine import Pin, UART, I2C  # Aggiungi UART qui
-import ntptime
-import dht
-from pzem import PZEM 
-from umqtt.simple import MQTTClient
+import machine
+from machine import I2C, Pin
+import time
 
-# --- CONFIGURAZIONE ---
-WIFI_SSID = "briz"
-WIFI_PASS = "Luca0001"
-BROKER_IP = "192.168.0.157"
-USER = "luca"
-PASS = "luca0001"
-
-# --- HARDWARE ---
-led = Pin(2, Pin.OUT)
-sensor = dht.DHT22(Pin(14))
-
-# --- TOPIC ---
-DEV_ID = "luca01"
-# Sensori
-TOPIC_T_CONFIG  = "homeassistant/sensor/luca01t/config"
-TOPIC_T_STATE   = "homeassistant/sensor/luca01t/state"
-TOPIC_IP_CONFIG = "homeassistant/sensor/luca01ip/config"
-TOPIC_IP_STATE  = "homeassistant/sensor/luca01ip/state"
-# Switch
-TOPIC_SW_CONFIG = "homeassistant/switch/luca01sw/config"
-TOPIC_SW_STATE  = "homeassistant/switch/luca01sw/state"
-TOPIC_SW_SET    = "homeassistant/switch/luca01sw/set"
-
-uart = UART(2, baudrate=9600, tx=17, rx=16)
-#pzem = PZEM(uart)
-# Topic e Discovery per la Potenza (W)
-TOPIC_POW_CONFIG = "homeassistant/sensor/luca01p/config"
-TOPIC_POW_STATE  = "homeassistant/sensor/luca01p/state"
+i2c = I2C(0, scl=Pin(22), sda=Pin(21))
+addr = 0x20 # Verifica con i2c.scan()
 
 
-# --- FUNZIONE LETTURA PZEM ---
+# Pin Echo diretti su ESP32
+echo1 = machine.Pin(18, machine.Pin.IN)
+echo2 = machine.Pin(19, machine.Pin.IN)
 
+# Sequenze separate per i due motori
+seq_a = [0x01, 0x02, 0x04, 0x08] # Pin 0, 1, 2, 3
+# Invertiamo l'ordine della sequenza B direttamente qui per testare il cablaggio
+seq_b = [0x80, 0x40, 0x20, 0x10] # Pin 17, 16, 15, 14 (ordine bit 7,6,5,4 del secondo byte)
 
-
-def decode_pzem(res):
-    try:
-        # Tensione: Byte 3-4 (Uint16)
-        v = struct.unpack(">H", res[3:5])[0] / 10.0
-        
-        # Corrente: Byte 5-9 (Uint32 con registri invertiti)
-        # Leggiamo due Uint16 e li scambiamo
-        i_l, i_h = struct.unpack(">HH", res[5:9])
-        i = (i_h << 16 | i_l) / 1000.0
-        
-        # Potenza: Byte 9-13 (Uint32 con registri invertiti)
-        p_l, p_h = struct.unpack(">HH", res[9:13])
-        p = (p_h << 16 | p_l) / 10.0
-        
-        # Frequenza: Byte 19-20
-        #f = struct.unpack(">H", res[19:21])[0] / 10.0
-        f = struct.unpack(">H", res[17:19])[0] / 10.0
-        return v, i, p, f
-    except:
-        return None, None, None, None
-
-
-def read_and_publish():
-    # 1. Fase di Lettura (READ)
-    cmd = b"\x01\x04\x00\x00\x00\x0A\x70\x0D"
-    uart.write(cmd)
-    time.sleep(0.2)
+def get_distanza(sensore_id):
+    # sensore_id 0 = S1 (P4), 1 = S2 (P5)
+    trig_bit = 0x10 if sensore_id == 0 else 0x20
+    echo_pin = echo1 if sensore_id == 0 else echo2
     
-    if uart.any():
-        res = uart.read()
-        if len(res) >= 25:
-            # 2. Fase di Decodifica (DECODE)
-            volts, amps, watts, freq = decode_pzem(res)
-            
-            if volts is not None:
-                print(f"V: {volts}V | P: {watts}W | F: {freq}Hz")
-                
-                # 3. Fase di Pubblicazione (MQTT)
-                #client.publish(TOPIC_V_STATE, str(volts))
-                client.publish(TOPIC_POW_STATE, str(watts))
-                #client.publish(TOPIC_F_STATE, str(freq))
-        else:
-            print("Pacchetto incompleto ricevuto")
-    else:
-        print("PZEM non risponde alla richiesta. Provo a riconnetermi")
-        try:
-            pzem = PZEM(uart)
-            print("Conneso a UART")
-        except Exception as e:
-            print("Errore durante la connessione UART:", e)
-
-
-# --- CALLBACK PER RICEZIONE COMANDI ---
-def sub_cb(topic, msg):
-    print(f"Messaggio ricevuto: {topic} -> {msg}")
-    if topic == TOPIC_SW_SET.encode():
-        if msg == b"ON":
-            led.value(1)
-            client.publish(TOPIC_SW_STATE, "ON") # Conferma lo stato a HA
-        elif msg == b"OFF":
-            led.value(0)
-            client.publish(TOPIC_SW_STATE, "OFF")
-
-# --- CONNESSIONE WIFI ---
-wlan = network.WLAN(network.STA_IF)
-wlan.active(True)
-wlan.connect(WIFI_SSID, WIFI_PASS)
-
-print("Connessione Wi-Fi...", end="")
-while not wlan.isconnected():
-    time.sleep(1)
-    print(".", end="")
-
-mio_ip = wlan.ifconfig()[0]
-print("\nIP:", mio_ip)
-
-# --- PAYLOADS ---
-
-dev_info = {"ids": [DEV_ID], "name": "Esp32_Luca"}
-
-data_pow = {
-    "name": "Potenza",
-    "uniq_id": "luca01pow",
-    "stat_t": TOPIC_POW_STATE,
-    "unit_of_meas": "W",
-    "dev_cla": "power",
-    "dev": dev_info
-}
-
-data_t = {
-    "name": "Temperatura",
-    "uniq_id": "luca01t",
-    "stat_t": TOPIC_T_STATE,
-    "unit_of_meas": "C",
-    "dev_cla": "temperature",
-    "dev": dev_info
-}
-
-data_ip = {
-    "name": "IP",
-    "uniq_id": "luca01ip",
-    "stat_t": TOPIC_IP_STATE,
-    "ent_cat": "diagnostic",
-    "dev": dev_info
-}
-
-data_sw = {
-    "name": "Led Interno",
-    "uniq_id": "luca01sw",
-    "stat_t": TOPIC_SW_STATE,
-    "cmd_t": TOPIC_SW_SET, # Topic dove riceve i comandi
-    "payload_on": "ON",
-    "payload_off": "OFF",
-    "dev": dev_info
-}
-
-# --- MQTT SETUP ---
-client = MQTTClient("esp32_luca", BROKER_IP, user=USER, password=PASS)
-client.set_callback(sub_cb)
-
-try:
-    ntptime.settime()
-    print("Sincronizzazione completata!")
-except Exception as e:
-    print("Errore durante la sincronizzazione:", e)
-
-# 2. Visualizza l'ora attuale (UTC)
-print("Ora attuale :", time.localtime())
-
-try:
-    pzem = PZEM(uart)
-    print("Conneso a UART")
-except Exception as e:
-    print("Errore durante la connessione UART:", e)
-
-
-
-
-try:
-    client.connect()
-    # Invia le 3 configurazioni
-    client.publish(TOPIC_T_CONFIG, ujson.dumps(data_t).encode('utf-8'), retain=True)
-    client.publish(TOPIC_IP_CONFIG, ujson.dumps(data_ip).encode('utf-8'), retain=True)
-    client.publish(TOPIC_SW_CONFIG, ujson.dumps(data_sw).encode('utf-8'), retain=True)
-    client.publish(TOPIC_POW_CONFIG, ujson.dumps(data_pow).encode('utf-8'), retain=True)
-
-    # Sottoscrizione al topic del comando
-    client.subscribe(TOPIC_SW_SET)
+    # Invia impulso Trig via Expander (10 microsecondi)
+    i2c.writeto(addr, bytes([trig_bit, 0x00]))
+    time.sleep_us(10)
+    i2c.writeto(addr, bytes([0x00, 0x00]))
     
-    # Stato iniziale
-    client.publish(TOPIC_IP_STATE, mio_ip, retain=True)
-    client.publish(TOPIC_SW_STATE, "OFF")
-    print("MQTT Pronto e Sottoscritto!")
-except Exception as e:
-    print("Errore MQTT:", e)
+    # Misura durata Echo (timeout 30ms = ~5 metri)
+    durata = machine.time_pulse_us(echo_pin, 1, 30000)
+    
+    if durata < 0: return 999 # Errore o fuori portata
+    
+    # Calcolo distanza in cm (velocità suono / 2)
+    distanza = (durata / 2) / 29.1
+    return distanza
 
-# --- LOOP ---
+
+def test_direzioni(passi, d_a=1, d_b=1):
+    idx_a = 0
+    idx_b = 0
+    
+    for _ in range(passi):
+        # Calcolo Byte A
+        val_a = seq_a[idx_a]
+        idx_a = (idx_a + d_a) % 4
+        
+        # Calcolo Byte B (Già posizionato sui bit alti 14-17)
+        val_b = seq_b[idx_b]
+        idx_b = (idx_b + d_b) % 4
+        
+        # Invio all'expander
+        i2c.writeto(addr, bytes([val_a, val_b]))
+        time.sleep_ms(4)
+
+    i2c.writeto(addr, b'\x00\x00')
+
+# TEST: A avanti (1), B indietro (-1)
+
 while True:
-    try:
-        print("inizio loop principale")
-        # Controlla se sono arrivati messaggi (fondamentale per lo switch)
-        client.check_msg()
-        #
-        sensor.measure()
-        t = sensor.temperature()
-        client.publish(TOPIC_T_STATE, str(t))
-        #
-        read_and_publish()
-        year, month, day, hour, minute, second, weekday, yearday = time.localtime()
-        print(f"Date: {day}/{month}/{year}")
-        print(f"Time: {hour}:{minute}:{second}")
-        print("fine loop principale")
-        print("....................................")
-    except Exception as e:
-        print("Errore loop:", e)
-        try: client.connect(); client.subscribe(TOPIC_SW_SET)
-        except: pass
+    print(f"avvio motori")
+    test_direzioni(500, d_a=-1, d_b=-1)
+    printf(f"fermo  i motori")
+    d1 = get_distanza(0)
+    d2 = get_distanza(1)
+    print(f"Dist S1: {d1:.1f} cm | Dist S2: {d2:.1f} cm")
     
-    time.sleep(5) # Ridotto a 5 secondi per maggiore reattività
+    # Esempio: se troppo vicino (< 10cm), potresti fermare i motori
+    if d1 < 10 :
+        print("!!! OSTACOLO Destro!!!")
+        test_direzioni(500, d_a=-1, d_b=-1)
+
+    if  d2 < 10:
+        print("!!! OSTACOLO Sinistro!!!")
+        test_direzioni(500, d_a=-1, d_b=-1)
+        
+    time.sleep(1)
+
+

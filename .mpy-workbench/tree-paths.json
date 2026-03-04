@@ -12,12 +12,6 @@
     "depth": 0
   },
   {
-    "fullPath": "/ha_mqtt_device.py",
-    "name": "ha_mqtt_device.py",
-    "isDir": false,
-    "depth": 0
-  },
-  {
     "fullPath": "/lib",
     "name": "lib",
     "isDir": true,
@@ -44,12 +38,6 @@
   {
     "fullPath": "/main.py",
     "name": "main.py",
-    "isDir": false,
-    "depth": 0
-  },
-  {
-    "fullPath": "/pzem.py",
-    "name": "pzem.py",
     "isDir": false,
     "depth": 0
   }
