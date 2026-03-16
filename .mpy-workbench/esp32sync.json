@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "syncId": "33dde125-2457-423d-ab34-e1677039553b",
+  "syncId": "37533279-e29d-4728-a224-e2cb98bb0b07",
   "root": "/home/luca/micropython/sw",
-  "generatedAt": 1772643540009,
+  "generatedAt": 1773427299044,
   "files": {
     "README.md": {
       "size": 20,
@@ -13,8 +13,12 @@
       "mtime": 1772225595249
     },
     "main.py": {
-      "size": 2172,
-      "mtime": 1772643439471
+      "size": 3073,
+      "mtime": 1773002739085
+    },
+    "sw.code-workspace": {
+      "size": 60,
+      "mtime": 1773329953548
     }
   }
 }

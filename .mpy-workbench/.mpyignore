@@ -53,6 +53,6 @@ coverage.xml
 *.swp
 *.swo
 
-# MPY Workbench
+# MicroPython WorkBench
 .mpy-workbench/
 /.mpy-workbench

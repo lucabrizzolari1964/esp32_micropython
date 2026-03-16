@@ -18,26 +18,14 @@
     "depth": 0
   },
   {
-    "fullPath": "/lib/ssl.mpy",
-    "name": "ssl.mpy",
-    "isDir": true,
-    "depth": 1
-  },
-  {
-    "fullPath": "/lib/umqtt",
-    "name": "umqtt",
-    "isDir": true,
-    "depth": 1
-  },
-  {
-    "fullPath": "/lib/umqtt/simple.mpy",
-    "name": "simple.mpy",
-    "isDir": false,
-    "depth": 2
-  },
-  {
     "fullPath": "/main.py",
     "name": "main.py",
+    "isDir": false,
+    "depth": 0
+  },
+  {
+    "fullPath": "/sw.code-workspace",
+    "name": "sw.code-workspace",
     "isDir": false,
     "depth": 0
   }
