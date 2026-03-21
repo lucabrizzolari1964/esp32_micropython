@@ -1,7 +1,7 @@
 [
   {
-    "fullPath": "/README.md",
-    "name": "README.md",
+    "fullPath": "/__init__.py",
+    "name": "__init__.py",
     "isDir": false,
     "depth": 0
   },
@@ -12,10 +12,40 @@
     "depth": 0
   },
   {
-    "fullPath": "/lib",
-    "name": "lib",
+    "fullPath": "/ir_rx",
+    "name": "ir_rx",
     "isDir": true,
     "depth": 0
+  },
+  {
+    "fullPath": "/ir_rx/__init__.py",
+    "name": "__init__.py",
+    "isDir": false,
+    "depth": 1
+  },
+  {
+    "fullPath": "/ir_rx/nec.py",
+    "name": "nec.py",
+    "isDir": false,
+    "depth": 1
+  },
+  {
+    "fullPath": "/ir_tx",
+    "name": "ir_tx",
+    "isDir": true,
+    "depth": 0
+  },
+  {
+    "fullPath": "/ir_tx/__init__.py",
+    "name": "__init__.py",
+    "isDir": false,
+    "depth": 1
+  },
+  {
+    "fullPath": "/ir_tx/nec.py",
+    "name": "nec.py",
+    "isDir": false,
+    "depth": 1
   },
   {
     "fullPath": "/main.py",
