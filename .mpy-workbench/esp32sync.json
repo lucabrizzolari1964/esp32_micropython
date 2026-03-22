@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "syncId": "cec18474-c2e5-4423-ab15-cda5942ea3a8",
+  "syncId": "05571103-5086-42b6-805e-774d31fd2e41",
   "root": "/home/luca/micropython/sw",
-  "generatedAt": 1774025127728,
+  "generatedAt": 1774192228853,
   "files": {
     "boot.py": {
       "size": 139,
@@ -25,8 +25,8 @@
       "mtime": 1773950562529
     },
     "main.py": {
-      "size": 4304,
-      "mtime": 1774025120070
+      "size": 8642,
+      "mtime": 1774192219302
     }
   }
 }
