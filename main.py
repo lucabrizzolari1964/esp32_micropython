@@ -1,6 +1,14 @@
 from machine import I2C, Pin, time_pulse_us
 import time
 import urandom 
+import network
+import socket
+import os
+
+#server di log
+SERVER_IP = "192.168.0.157" 
+SERVER_PORT = 5005
+indirizzo_ip=""
 
 # --- CONFIGURAZIONE HARDWARE ---
 i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=400000)
@@ -21,6 +29,60 @@ led = Pin(2, Pin.OUT)
 # Sequenze Motori (8 fasi - Passo Passo)
 seq_a = [0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08, 0x09]
 seq_b = [0x10, 0x30, 0x20, 0x60, 0x40, 0xC0, 0x80, 0x90]
+
+# Configura il Wi-Fi
+def connetti_wifi(ssid, password):
+    wlan = network.WLAN(network.STA_IF)
+    if wlan.active():
+        wlan.active(False)
+        time.sleep(0.5)
+    try:
+        wlan.active(True) # Riattiva in modo pulito
+    except OSError as e:
+        print("Errore critico Wi-Fi, riavvio del robot...")
+        machine.reset() # Se l'errore persiste, l'unica è il reboot hardware
+    
+    if not wlan.isconnected():
+        print(f'Connessione a {ssid}...')
+        wlan.connect(ssid, password)
+        
+        # Attesa della connessione (timeout di 10 secondi)
+        tentativi = 0
+        while not wlan.isconnected() and tentativi < 10:
+            time.sleep(1)
+            tentativi += 1
+            print(".", end="")
+            
+    if wlan.isconnected():
+        # Prende i dati della configurazione (IP, Subnet, Gateway, DNS)
+        config = wlan.ifconfig()
+        print('\n--- Connessione Riuscita! ---')
+        print(f'Indirizzo IP Robot: {config[0]}') # Questo è l'IP da usare in VS Code
+        print(f'Subnet Mask:      {config[1]}')
+        print(f'Gateway:          {config[2]}')
+        print('-----------------------------\n')
+        print(f'Indirizzo IP Robot uscita : { indirizzo_ip} ')
+        return config[0]
+    else:
+        print('\nErrore: Impossibile connettersi al Wi-Fi.')
+        return None
+
+def send_udp(message):
+    # 1. Creazione del socket UDP (AF_INET per IPv4, SOCK_DGRAM per UDP)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    
+    try:
+        # 2. Invio del messaggio (i dati devono essere convertiti in bytes)
+        print(f"Invio messaggio {message} {SERVER_IP}:{SERVER_PORT}...")
+        sock.sendto(message.encode(), (SERVER_IP, SERVER_PORT))
+        print("Messaggio inviato correttamente.")
+        
+    except Exception as e:
+        print("Errore durante l'invio:", e)
+        
+    finally:
+        # 3. Chiusura del socket per liberare risorse
+        sock.close()
 
 # --- FUNZIONI DI LETTURA E MOVIMENTO ---
 
@@ -107,6 +169,7 @@ def muovi_fisico(passi, dir_a, dir_b, velocita=3):
 
 def manovra_spirale():
     print("[AI] Avvio taglio a SPIRALE...")
+    send_udp("[AI] Avvio taglio a SPIRALE...")
     # Crea 5 cerchi concentrici sempre più larghi
     for raggio in range(2, 7):
         # Il motore esterno (SX) gira più del motore interno (DX)
@@ -115,12 +178,16 @@ def manovra_spirale():
         # Sicurezza: se vede un ostacolo durante la spirale, interrompe subito
         if leggi_distanza(0) < 20 or leggi_distanza(1) < 20:
             print("[AI] Ostacolo in spirale! Esco.")
+            send_udp("[AI] Ostacolo in spirale! Esco.")
             break
+    print("Esco dal taglio a spirale.")
+    send_udp("Esco dal taglio a spirale.")
 
 
 def esplora():
     print("\n" + "="*70)
-    print("   ROBOT TAGLIAERBA AI V5.0 - RADAR + BUSSOLA + TURBO ESCAPE")
+    print("ROBOT TAGLIAERBA LUCA"+ "="*49)
+    send_udp("ROBOT TAGLIAERBA LUCA AVVIATO!")
     print("="*70)
     
     urti_vicini = 0
@@ -149,17 +216,18 @@ def esplora():
             # SUPER DEBUG CON BUSSOLA E TURBO
             status = "TURBO" if modalita_turbo else "NORMAL"
             print(f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
-
+            send_udp(f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
             # 3. PRIORITÀ: CEMENTO O VUOTO
             if tipo_terreno == "Cemento" or dist_sotto > 18:
                 print(f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
+                send_udp(f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
                 modalita_turbo = False
                 muovi_fisico(1200, -1, -1)
                 muovi_fisico(10000, 1, -1)
                 passi_totali = 0
                 continue
 
-            if passi_totali > 5000:
+            if passi_totali > 8000:
                 manovra_spirale()
                 passi_totali = 0
                 continue
@@ -168,21 +236,26 @@ def esplora():
             if fsx < 15 or fdx < 15 or (lsx < 15 and ldx < 15):
                 modalita_turbo = False # Ferma il turbo se sbatte
                 print(f"OSTACOLO! ... Vado più piano tolgo il turbo")
+                send_udp("OSTACOLO! ... Vado più piano tolgo il turbo")
                 # Bussola Virtuale: evita di girare sempre nello stesso verso
                 if bilancio_sterzo > 3:
                     dir_fuga = -1 # Forza SX
                     print("[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
+                    send_udp("[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
                 elif bilancio_sterzo < -3:
                     dir_fuga = 1 # Forza DX
                     print("[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
+                    send_udp("[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
                 else:
                     dir_fuga = 1 if ldx > lsx else -1 # Scegli lato libero
                     print(f"[AI] BUSSOLA: dir_fuga :{dir_fuga} scelgo lato con più spazio")
+                    send_udp
                 # Gestione incastro (Angolo cieco)
                 if passi_totali < soglia_incastro:
                     urti_vicini += 1
                     dir_fuga *= -1 # Se sbatte subito, cambia idea
                     print(f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
+                    send_udp(f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
                 else:
                     urti_vicini = 1
 
@@ -192,29 +265,33 @@ def esplora():
                 # AZIONE DI FUGA
                 if urti_vicini >= 3:
                     print("[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
+                    send_udp("[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
                     muovi_fisico(1800, -1, -0.4) 
                     muovi_fisico(10000, 1, -1)
                     modalita_turbo = True # Prossima marcia sarà Turbo
                     urti_vicini = 0
                 else:
                     muovi_fisico(700, -1, -1)
-                    print(f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e {dir_fuga}  ")
+                    print(f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
+                    send_udp(f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
                     muovi_fisico(5000, dir_fuga, -dir_fuga)
                 continue
 
             # 5. CORREZIONI LATERALI (Wall Following leggero)
             elif lsx < 10:
                 print("Ostacolo laterale SX")
-                muovi_fisico(250, 1, -1, 2)
+                send_udp("Ostacolo laterale SX")
+                muovi_fisico(250, 1, -1, 1)
                 passi_totali += 250
             elif ldx < 10:
                 print("Ostacolo laterale DS")
-                muovi_fisico(250, -1, 1, 2)
+                send_udp("Ostacolo laterale DS")
+                muovi_fisico(250, -1, 1, 1)
                 passi_totali += 250
 
             # 6. MARCIA NORMALE O TURBO
             else:
-                p_step = 1000 if modalita_turbo else 500
+                p_step = 2000 if modalita_turbo else 1000
                 vel = 1 if modalita_turbo else 2 # vel 1 è più veloce per i motori stepper
                 muovi_fisico(p_step, 1, 1, vel)
                 passi_totali += p_step
@@ -226,9 +303,14 @@ def esplora():
                     if modalita_turbo:
                         modalita_turbo = False
                         print("[AI] Turbo OFF: Zona libera raggiunta.")
+                        send_udp("[AI] Turbo OFF: Zona libera raggiunta.")
 
     except KeyboardInterrupt:
         i2c.writeto(addr, b'\x00\x00')
         print("\n[STOP] Robot spento.")
-
+        send_udp("[STOP] Robot spento.")
+indirizzo_ip = connetti_wifi("briz", "Luca0001")
+print(f'Indirizzo IP Robot: { indirizzo_ip }')
+send_udp(f'Indirizzo ip del robot : {indirizzo_ip} ')
+send_udp("Robot tagliaerba avviato e connesso al Wi-Fi!")
 esplora()
