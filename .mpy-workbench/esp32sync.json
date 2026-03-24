@@ -1,32 +1,16 @@
 {
   "version": 1,
-  "syncId": "2f1482eb-9bac-4460-9801-b8cac04ac2e2",
+  "syncId": "2885dfc7-9e7e-4a90-8100-0956afb90d68",
   "root": "/home/luca/micropython/sw",
-  "generatedAt": 1774257370489,
+  "generatedAt": 1774371545485,
   "files": {
     "boot.py": {
       "size": 139,
       "mtime": 1773936565834
     },
-    "ir_rx/__init__.py": {
-      "size": 2448,
-      "mtime": 1773953499124
-    },
-    "ir_rx/nec.py": {
-      "size": 3074,
-      "mtime": 1773951026742
-    },
-    "ir_tx/__init__.py": {
-      "size": 5514,
-      "mtime": 1773950706240
-    },
-    "ir_tx/nec.py": {
-      "size": 1398,
-      "mtime": 1773950562529
-    },
     "main.py": {
-      "size": 12139,
-      "mtime": 1774257367838
+      "size": 12743,
+      "mtime": 1774371542087
     }
   }
 }

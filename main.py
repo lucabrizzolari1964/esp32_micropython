@@ -18,10 +18,11 @@ addr = 0x20
 echo_sx, echo_dx = Pin(18, Pin.IN), Pin(19, Pin.IN)
 echo_sotto = Pin(5, Pin.IN)
 echo_lat_sx, echo_lat_dx = Pin(32, Pin.IN), Pin(33, Pin.IN)
-
+#sensore centrale 
+echo_centrale = Pin(35, Pin.IN)
 # Pin Trigger Laterali (Diretti su ESP32 per liberare l'expander)
 trig_lat_sx = Pin(25, Pin.OUT)
-trig_lat_dx = Pin(26, Pin.OUT)
+trig_lat_dx = Pin(26, Pin.OUT) 
 
 button = Pin(23, Pin.IN, Pin.PULL_UP)
 led = Pin(2, Pin.OUT)
@@ -61,28 +62,28 @@ def connetti_wifi(ssid, password):
         print(f'Subnet Mask:      {config[1]}')
         print(f'Gateway:          {config[2]}')
         print('-----------------------------\n')
-        print(f'Indirizzo IP Robot uscita : { indirizzo_ip} ')
+        print(f'Indirizzo IP Robot : { indirizzo_ip} ')
         return config[0]
     else:
         print('\nErrore: Impossibile connettersi al Wi-Fi.')
         return None
 
-def send_udp(message):
+def send_udp(sock,message):
     # 1. Creazione del socket UDP (AF_INET per IPv4, SOCK_DGRAM per UDP)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     try:
         # 2. Invio del messaggio (i dati devono essere convertiti in bytes)
-        print(f"Invio messaggio {message} {SERVER_IP}:{SERVER_PORT}...")
+        #print(f"Invio messaggio {message} {SERVER_IP}:{SERVER_PORT}...")
         sock.sendto(message.encode(), (SERVER_IP, SERVER_PORT))
-        print("Messaggio inviato correttamente.")
+        #print("Messaggio inviato correttamente.")
         
     except Exception as e:
         print("Errore durante l'invio:", e)
         
-    finally:
+    #finally:
         # 3. Chiusura del socket per liberare risorse
-        sock.close()
+    #    sock.close()
 
 # --- FUNZIONI DI LETTURA E MOVIMENTO ---
 
@@ -167,27 +168,32 @@ def muovi_fisico(passi, dir_a, dir_b, velocita=3):
 
 # --- LOGICA AI AVANZATA ---
 
-def manovra_spirale():
-    print("[AI] Avvio taglio a SPIRALE...")
-    send_udp("[AI] Avvio taglio a SPIRALE...")
+def manovra_spirale(sock):
+    print("[AI] Avvio taglio a SPIRALE......")
+    send_udp(sock,"[AI] Avvio taglio a SPIRALE......")
     # Crea 5 cerchi concentrici sempre più larghi
     for raggio in range(2, 7):
         # Il motore esterno (SX) gira più del motore interno (DX)
         # Il coefficiente (0.15 * raggio) allarga la curva gradualmente
-        muovi_fisico(600 * raggio, 1, 0.15 * raggio, 2)
+        muovi_fisico(300 * raggio, 1, 0.15 * raggio, 2)
         # Sicurezza: se vede un ostacolo durante la spirale, interrompe subito
-        if leggi_distanza(0) < 20 or leggi_distanza(1) < 20:
+        fsx, fdx = leggi_distanza(0), leggi_distanza(1)
+        time.sleep_ms(10)
+        lsx, ldx = leggi_distanza(3), leggi_distanza(4)
+        print(f" LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} ")
+        send_udp(sock,f"LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} ")
+        if leggi_distanza(0) < 20 or leggi_distanza(1) < 20 or (leggi_distanza(3) < 20 or leggi_distanza(4) < 20):
             print("[AI] Ostacolo in spirale! Esco.")
-            send_udp("[AI] Ostacolo in spirale! Esco.")
+            send_udp(sock,"[AI] Ostacolo in spirale! Esco.")
             break
     print("Esco dal taglio a spirale.")
-    send_udp("Esco dal taglio a spirale.")
+    send_udp(sock,"Esco dal taglio a spirale.")
 
 
-def esplora():
+def esplora(sock):
     print("\n" + "="*70)
     print("ROBOT TAGLIAERBA LUCA"+ "="*49)
-    send_udp("ROBOT TAGLIAERBA LUCA AVVIATO!")
+    send_udp(sock,"ROBOT TAGLIAERBA LUCA AVVIATO!")
     print("="*70)
     
     urti_vicini = 0
@@ -195,7 +201,7 @@ def esplora():
     bilancio_sterzo = 0  # + = troppe DX, - = troppe SX
     modalita_turbo = False
     soglia_incastro = 4000 
-
+    
     try:
         while True:
             # 1. GESTIONE TERRENO (Pulsante Pin 23)
@@ -216,11 +222,11 @@ def esplora():
             # SUPER DEBUG CON BUSSOLA E TURBO
             status = "TURBO" if modalita_turbo else "NORMAL"
             print(f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
-            send_udp(f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
+            send_udp(sock,f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
             # 3. PRIORITÀ: CEMENTO O VUOTO
             if tipo_terreno == "Cemento" or dist_sotto > 18:
                 print(f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
-                send_udp(f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
+                send_udp(sock,f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
                 modalita_turbo = False
                 muovi_fisico(1200, -1, -1)
                 muovi_fisico(10000, 1, -1)
@@ -228,7 +234,7 @@ def esplora():
                 continue
 
             if passi_totali > 8000:
-                manovra_spirale()
+                manovra_spirale(sock)
                 passi_totali = 0
                 continue
 
@@ -236,26 +242,26 @@ def esplora():
             if fsx < 15 or fdx < 15 or (lsx < 15 and ldx < 15):
                 modalita_turbo = False # Ferma il turbo se sbatte
                 print(f"OSTACOLO! ... Vado più piano tolgo il turbo")
-                send_udp("OSTACOLO! ... Vado più piano tolgo il turbo")
+                send_udp(sock,f"OSTACOLO! ... Vado più piano tolgo il turbo")
                 # Bussola Virtuale: evita di girare sempre nello stesso verso
                 if bilancio_sterzo > 3:
                     dir_fuga = -1 # Forza SX
                     print("[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
-                    send_udp("[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
+                    send_udp(sock,f"[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
                 elif bilancio_sterzo < -3:
                     dir_fuga = 1 # Forza DX
                     print("[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
-                    send_udp("[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
+                    send_udp(sock,f"[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
                 else:
                     dir_fuga = 1 if ldx > lsx else -1 # Scegli lato libero
                     print(f"[AI] BUSSOLA: dir_fuga :{dir_fuga} scelgo lato con più spazio")
-                    send_udp
+                    send_udp(sock,f"[AI] BUSSOLA: dir_fuga :{dir_fuga} scelgo lato con più spazio")
                 # Gestione incastro (Angolo cieco)
                 if passi_totali < soglia_incastro:
                     urti_vicini += 1
                     dir_fuga *= -1 # Se sbatte subito, cambia idea
                     print(f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
-                    send_udp(f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
+                    send_udp(sock,f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
                 else:
                     urti_vicini = 1
 
@@ -265,7 +271,7 @@ def esplora():
                 # AZIONE DI FUGA
                 if urti_vicini >= 3:
                     print("[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
-                    send_udp("[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
+                    send_udp(sock,f"[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
                     muovi_fisico(1800, -1, -0.4) 
                     muovi_fisico(10000, 1, -1)
                     modalita_turbo = True # Prossima marcia sarà Turbo
@@ -273,19 +279,19 @@ def esplora():
                 else:
                     muovi_fisico(700, -1, -1)
                     print(f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
-                    send_udp(f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
+                    send_udp(sock,f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
                     muovi_fisico(5000, dir_fuga, -dir_fuga)
                 continue
 
             # 5. CORREZIONI LATERALI (Wall Following leggero)
             elif lsx < 10:
                 print("Ostacolo laterale SX")
-                send_udp("Ostacolo laterale SX")
+                send_udp(sock,"Ostacolo laterale SX")
                 muovi_fisico(250, 1, -1, 1)
                 passi_totali += 250
             elif ldx < 10:
                 print("Ostacolo laterale DS")
-                send_udp("Ostacolo laterale DS")
+                send_udp(sock,"Ostacolo laterale DS")
                 muovi_fisico(250, -1, 1, 1)
                 passi_totali += 250
 
@@ -303,14 +309,15 @@ def esplora():
                     if modalita_turbo:
                         modalita_turbo = False
                         print("[AI] Turbo OFF: Zona libera raggiunta.")
-                        send_udp("[AI] Turbo OFF: Zona libera raggiunta.")
+                        send_udp(sock,f"[AI] Turbo OFF: Zona libera raggiunta.")
 
     except KeyboardInterrupt:
         i2c.writeto(addr, b'\x00\x00')
         print("\n[STOP] Robot spento.")
-        send_udp("[STOP] Robot spento.")
+        send_udp(sock,f"[STOP] Robot spento.")
 indirizzo_ip = connetti_wifi("briz", "Luca0001")
 print(f'Indirizzo IP Robot: { indirizzo_ip }')
-send_udp(f'Indirizzo ip del robot : {indirizzo_ip} ')
-send_udp("Robot tagliaerba avviato e connesso al Wi-Fi!")
-esplora()
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+send_udp(sock,f'Indirizzo ip del robot : {indirizzo_ip} ')
+send_udp(sock,f"Robot tagliaerba avviato e connesso al Wi-Fi!")
+esplora(sock)
