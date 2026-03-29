@@ -4,11 +4,14 @@ import urandom
 import network
 import socket
 import os
+import gc
 
 #server di log
 SERVER_IP = "192.168.0.157" 
 SERVER_PORT = 5005
 indirizzo_ip=""
+log_msg_stati=""
+
 
 # --- CONFIGURAZIONE HARDWARE ---
 i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=400000)
@@ -71,16 +74,13 @@ def connetti_wifi(ssid, password):
 def send_udp(sock,message):
     # 1. Creazione del socket UDP (AF_INET per IPv4, SOCK_DGRAM per UDP)
     #sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    
     try:
-        # 2. Invio del messaggio (i dati devono essere convertiti in bytes)
         #print(f"Invio messaggio {message} {SERVER_IP}:{SERVER_PORT}...")
         sock.sendto(message.encode(), (SERVER_IP, SERVER_PORT))
         #print("Messaggio inviato correttamente.")
         
     except Exception as e:
-        print("Errore durante l'invio:", e)
-        
+        print("ERRORE ERRORE Errore durante l'invio:", e)    
     #finally:
         # 3. Chiusura del socket per liberare risorse
     #    sock.close()
@@ -88,13 +88,18 @@ def send_udp(sock,message):
 # --- FUNZIONI DI LETTURA E MOVIMENTO ---
 
 def leggi_distanza(sensore):
-    """ 0:F_SX, 1:F_DX, 2:SOTTO, 3:L_SX, 4:L_DX """
-    if sensore <= 2:
-        trig_bit = [0x10, 0x20, 0x40][sensore]
-        e_pin = [echo_sx, echo_dx, echo_sotto][sensore]
+    """ 0:F_SX, 1:F_DX, 2:SOTTO, 3:L_SX, 4:L_DX, 5:F_CENTRALE """
+    # Sensori su Expander I2C (0, 1, 2 e il nuovo 5 su P7)
+    if sensore <= 2 or sensore == 5:
+        # Se sensore è 5 usa 0x80 (P7), altrimenti usa la lista per 0,1,2
+        trig_bit = 0x80 if sensore == 5 else [0x10, 0x20, 0x40][sensore]
+        e_pin = echo_centrale if sensore == 5 else [echo_sx, echo_dx, echo_sotto][sensore]
+        
         i2c.writeto(addr, bytes([trig_bit, 0x00]))
         time.sleep_us(10)
         i2c.writeto(addr, bytes([0x00, 0x00]))
+    
+    # Sensori con Trigger diretto su ESP32 (3 e 4)
     else:
         t_pin, e_pin = (trig_lat_sx, echo_lat_sx) if sensore == 3 else (trig_lat_dx, echo_lat_dx)
         t_pin.value(1)
@@ -103,6 +108,40 @@ def leggi_distanza(sensore):
     
     durata = time_pulse_us(e_pin, 1, 25000)
     return 400 if durata < 0 else (durata / 2) / 29.1
+
+
+def get_distanza_filtrata(sensore, campioni=5):
+    letture = []
+    
+    for _ in range(campioni):
+        # --- TUA LOGICA ORIGINALE (Leggermente ottimizzata) ---
+        if sensore <= 2 or sensore == 5:
+            trig_bit = 0x80 if sensore == 5 else [0x10, 0x20, 0x40][sensore]
+            e_pin = echo_centrale if sensore == 5 else [echo_sx, echo_dx, echo_sotto][sensore]
+            i2c.writeto(addr, bytes([trig_bit, 0x00]))
+            time.sleep_us(10)
+            i2c.writeto(addr, bytes([0x00, 0x00]))
+        else:
+            t_pin, e_pin = (trig_lat_sx, echo_lat_sx) if sensore == 3 else (trig_lat_dx, echo_lat_dx)
+            t_pin.value(1)
+            time.sleep_us(10)
+            t_pin.value(0)
+        
+        durata = time_pulse_us(e_pin, 1, 25000)
+        dist = 400 if durata < 0 else (durata / 2) / 29.1
+        letture.append(dist)
+        #print(f"Distanza letta dal sensore {sensore}: {dist} cm")   
+        time.sleep_ms(5) # Breve pausa tra i campioni per evitare interferenze dell'eco precedente
+
+    # --- FILTRO MEDIANO ---
+    # Ordina le letture e prendi quella centrale (scarta i picchi da riflessione)
+    letture.sort()
+    distanza_finale = letture[len(letture) // 2]
+    
+    return distanza_finale
+
+
+
 
 def rileva_terreno():
     """ Analizza la stabilità per distinguere erba/cemento """
@@ -114,17 +153,6 @@ def rileva_terreno():
     if not letture: return "Errore"
     diff = max(letture) - min(letture)
     return "Cemento" if diff < 1 else "Erba"
-
-#def muovi_fisico(passi, dir_a, dir_b, velocita=3):
-#    idx_a, idx_b = 0, 0
-#    for _ in range(passi):
-#        b_low = seq_a[idx_a] if dir_a != 0 else 0
-#        b_high = seq_b[idx_b] if dir_b != 0 else 0
-#        i2c.writeto(addr, bytes([b_low, b_high]))
-#        if dir_a != 0: idx_a = (idx_a + (1 if dir_a > 0 else -1)) % 8
-#        if dir_b != 0: idx_b = (idx_b + (1 if dir_b > 0 else -1)) % 8
-#        time.sleep_ms(velocita)
-#    i2c.writeto(addr, b'\x00\x00')
 
 def muovi_fisico(passi, dir_a, dir_b, velocita=3):
     idx_a, idx_b = 0, 0
@@ -168,39 +196,34 @@ def muovi_fisico(passi, dir_a, dir_b, velocita=3):
 
 # --- LOGICA AI AVANZATA ---
 
-def manovra_spirale(sock):
-    print("[AI] Avvio taglio a SPIRALE......")
-    send_udp(sock,"[AI] Avvio taglio a SPIRALE......")
+def manovra_spirale(sock,log_msg_stati):
     # Crea 5 cerchi concentrici sempre più larghi
     for raggio in range(2, 7):
         # Il motore esterno (SX) gira più del motore interno (DX)
         # Il coefficiente (0.15 * raggio) allarga la curva gradualmente
-        muovi_fisico(300 * raggio, 1, 0.15 * raggio, 2)
+        print(log_msg_stati+" -> Spirale "+str(300 * raggio))
+        send_udp(sock, log_msg_stati+" -> Spirale "+str(300 * raggio))
+        muovi_fisico(300 * raggio, 1, 0.15 * raggio, 1)
         # Sicurezza: se vede un ostacolo durante la spirale, interrompe subito
         fsx, fdx = leggi_distanza(0), leggi_distanza(1)
-        time.sleep_ms(10)
+        fcent = leggi_distanza(5)
         lsx, ldx = leggi_distanza(3), leggi_distanza(4)
-        print(f" LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} ")
-        send_udp(sock,f"LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} ")
-        if leggi_distanza(0) < 20 or leggi_distanza(1) < 20 or (leggi_distanza(3) < 20 or leggi_distanza(4) < 20):
-            print("[AI] Ostacolo in spirale! Esco.")
-            send_udp(sock,"[AI] Ostacolo in spirale! Esco.")
+        if fsx < 20 or fdx < 20 or (lsx < 20 or ldx < 20 or fcent < 20):
+            print(log_msg_stati+" -> Spirale Esco ")
+            send_udp(sock, log_msg_stati+" -> Spirale Esco ")
+            modalita_turbo = False  
             break
-    print("Esco dal taglio a spirale.")
-    send_udp(sock,"Esco dal taglio a spirale.")
-
 
 def esplora(sock):
     print("\n" + "="*70)
-    print("ROBOT TAGLIAERBA LUCA"+ "="*49)
-    send_udp(sock,"ROBOT TAGLIAERBA LUCA AVVIATO!")
+    print("FUNC ESPLORA ROBOT TAGLIAERBA LUCA V 1.0- 5 SENSORI ATTIVI" + "="*30)
+    send_udp(sock, "FUNC ESPLORA ROBOT TAGLIAERBA V 1.0 LUCA AVVIATO!")
     print("="*70)
     
     urti_vicini = 0
     passi_totali = 0
     bilancio_sterzo = 0  # + = troppe DX, - = troppe SX
     modalita_turbo = False
-    soglia_incastro = 4000 
     
     try:
         while True:
@@ -214,110 +237,147 @@ def esplora(sock):
             else:
                 led.value(0)
 
-            # 2. LETTURA RADAR COMPLETO
-            fsx, fdx = leggi_distanza(0), leggi_distanza(1)
-            time.sleep_ms(10)
+            # 2. LETTURA RADAR COMPLETO (Incluso il nuovo FC)
+            #fsx, fdx = leggi_distanza(0), leggi_distanza(1)
+            fsx, fdx = get_distanza_filtrata(0, 5), get_distanza_filtrata(1, 5)
+            fcent = leggi_distanza(5) # <--- NUOVA LETTURA CENTRALE
             lsx, ldx = leggi_distanza(3), leggi_distanza(4)
 
-            # SUPER DEBUG CON BUSSOLA E TURBO
+            # LOG AGGIORNATO (Corretto con FC e i due punti su FD)
             status = "TURBO" if modalita_turbo else "NORMAL"
-            print(f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
-            send_udp(sock,f"[{status}] LS:{lsx:2.0f}|FS:{fsx:2.0f}|FD{fdx:2.0f}|LD:{ldx:2.0f} | Bilancio sterzo:{bilancio_sterzo} Passi totali:{passi_totali} Urti Vicini:{urti_vicini}")
-            # 3. PRIORITÀ: CEMENTO O VUOTO
+            log_msg_stati=""
+            log_msg_stati = f"[{status}] sinistro:{lsx:2.0f}|Fronte sinistro:{fsx:2.0f}|Davanti:{fcent:2.0f}|Fronte destro:{fdx:2.0f}|destro:{ldx:2.0f} | B:{bilancio_sterzo} P:{passi_totali} UV:{urti_vicini}"
+            #print(log_msg_stati)
+            #send_udp(sock, log_msg_stati)
+
+            # 3. LOGICA DECISIONALE AGGIORNATA
+            
+            # PRIORITÀ 1: CEMENTO O VUOTO
             if tipo_terreno == "Cemento" or dist_sotto > 18:
-                print(f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
-                send_udp(sock,f"[AI] ALLERTA: {tipo_terreno.upper()}! Scappo...")
+                print(f"[AI] ALLERTA: {tipo_terreno}! Indietro.")
+                muovi_fisico(300, -1, -1, 3)
+                muovi_fisico(5000, 1, -1, 3)
+                bilancio_sterzo += 1
+
+            # PRIORITÀ 2: OSTACOLO CENTRALE (Nuova logica)
+            elif fcent < 10: 
                 modalita_turbo = False
-                muovi_fisico(1200, -1, -1)
-                muovi_fisico(10000, 1, -1)
-                passi_totali = 0
-                continue
-
-            if passi_totali > 8000:
-                manovra_spirale(sock)
-                passi_totali = 0
-                continue
-
-            # 4. LOGICA OSTACOLO / ANGOLO
-            if fsx < 15 or fdx < 15 or (lsx < 15 and ldx < 15):
-                modalita_turbo = False # Ferma il turbo se sbatte
-                print(f"OSTACOLO! ... Vado più piano tolgo il turbo")
-                send_udp(sock,f"OSTACOLO! ... Vado più piano tolgo il turbo")
-                # Bussola Virtuale: evita di girare sempre nello stesso verso
-                if bilancio_sterzo > 3:
-                    dir_fuga = -1 # Forza SX
-                    print("[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
-                    send_udp(sock,f"[AI] BUSSOLA: Troppe DX, forzo rotazione a SX")
-                elif bilancio_sterzo < -3:
-                    dir_fuga = 1 # Forza DX
-                    print("[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
-                    send_udp(sock,f"[AI] BUSSOLA: Troppe SX, forzo rotazione a DX")
+                passi_totali = 0    
+                print(log_msg_stati+" -> Retromarcia")
+                send_udp(sock, log_msg_stati+" -> Retromarcia")
+                muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
+                fsx, fdx = leggi_distanza(0), leggi_distanza(1)
+                # Sceglie dove girare in base ai sensori diagonali e laterali
+                if fsx > fdx:
+                        passi_random = urandom.randint(2000, 8000)
+                        print(log_msg_stati+" -> Sinistra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Sinistra passi "+str(passi_random))
+                        muovi_fisico(passi_random, -1, 1, 3); bilancio_sterzo -= 1
                 else:
-                    dir_fuga = 1 if ldx > lsx else -1 # Scegli lato libero
-                    print(f"[AI] BUSSOLA: dir_fuga :{dir_fuga} scelgo lato con più spazio")
-                    send_udp(sock,f"[AI] BUSSOLA: dir_fuga :{dir_fuga} scelgo lato con più spazio")
-                # Gestione incastro (Angolo cieco)
-                if passi_totali < soglia_incastro:
-                    urti_vicini += 1
-                    dir_fuga *= -1 # Se sbatte subito, cambia idea
-                    print(f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
-                    send_udp(sock,f"[AI] Angolo rilevato (Urt:{urti_vicini}). Cambio rotazione.")
+                        passi_random = urandom.randint(2000, 8000)
+                        print(log_msg_stati+" -> Destra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Destra passi "+str(passi_random))
+                        muovi_fisico(passi_random, 1, -1, 3); bilancio_sterzo += 1
+                urti_vicini += 2
+
+            elif fsx < 20 and fdx < 20 and fcent < 25:
+                modalita_turbo = False
+                passi_totali = 0    
+                passi_random = urandom.randint(1000, 3000)  
+                print(log_msg_stati+" -> Angolo Indietro passi "+str(passi_random))
+                send_udp(sock, log_msg_stati+" -> Angolo Indietro passi "+str(passi_random))
+                muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
+                bilancio_sterzo += 1
+                fsx, fdx = leggi_distanza(0), leggi_distanza(1)
+                if lsx > ldx:
+                        passi_random = urandom.randint(2000, 8000)
+                        print(log_msg_stati+" -> Sinistra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Sinistra passi "+str(passi_random))
+                        muovi_fisico(passi_random, -1, 1, 3); bilancio_sterzo -= 1
                 else:
-                    urti_vicini = 1
+                        passi_random = urandom.randint(2000, 8000)
+                        print(log_msg_stati+" -> Destra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Destra passi "+str(passi_random))
+                        muovi_fisico(passi_random, 1, -1, 3); bilancio_sterzo += 1
+                urti_vicini += 2
+            
+               # PRIORITÀ 3: OSTACOLI DIAGONALI (SX o DX)
 
-                bilancio_sterzo += dir_fuga
-                passi_totali = 0
-
-                # AZIONE DI FUGA
-                if urti_vicini >= 3:
-                    print("[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
-                    send_udp(sock,f"[AI] MODALITA DISPERAZIONE: Retromarcia curva + Turbo")
-                    muovi_fisico(1800, -1, -0.4) 
-                    muovi_fisico(10000, 1, -1)
-                    modalita_turbo = True # Prossima marcia sarà Turbo
-                    urti_vicini = 0
+            elif fsx < 20 or fdx < 20:
+                if fsx < fdx: 
+                        modalita_turbo = False  
+                        passi_totali = 0
+                        passi_random = urandom.randint(2000, 8000)
+                        print(log_msg_stati+" -> Retromarcia 1000 e Destra "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Destra "+str(passi_random))
+                        muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
+                        muovi_fisico(passi_random, 1, -1, 3)
+                        bilancio_sterzo += 1
+                        
                 else:
-                    muovi_fisico(700, -1, -1)
-                    print(f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
-                    send_udp(sock,f"dir_fuga : {dir_fuga} mi muovo di 5000 con {dir_fuga} e -{dir_fuga}  ")
-                    muovi_fisico(5000, dir_fuga, -dir_fuga)
-                continue
-
-            # 5. CORREZIONI LATERALI (Wall Following leggero)
-            elif lsx < 10:
-                print("Ostacolo laterale SX")
-                send_udp(sock,"Ostacolo laterale SX")
-                muovi_fisico(250, 1, -1, 1)
-                passi_totali += 250
-            elif ldx < 10:
-                print("Ostacolo laterale DS")
-                send_udp(sock,"Ostacolo laterale DS")
-                muovi_fisico(250, -1, 1, 1)
-                passi_totali += 250
-
-            # 6. MARCIA NORMALE O TURBO
-            else:
-                p_step = 2000 if modalita_turbo else 1000
-                vel = 1 if modalita_turbo else 2 # vel 1 è più veloce per i motori stepper
-                muovi_fisico(p_step, 1, 1, vel)
-                passi_totali += p_step
-                
-                # Se viaggia libero, resetta i problemi
-                if passi_totali > 20000:
-                    urti_vicini = 0
-                    bilancio_sterzo = 0
-                    if modalita_turbo:
                         modalita_turbo = False
-                        print("[AI] Turbo OFF: Zona libera raggiunta.")
-                        send_udp(sock,f"[AI] Turbo OFF: Zona libera raggiunta.")
+                        passi_totali = 0
+                        passi_random = urandom.randint(2000, 8000)
+                        print(log_msg_stati+" -> Retromarcia 1000 e Sinistra "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Retromarcia e Sinistra "+str(passi_random))
+                        muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
+                        muovi_fisico(passi_random, -1, 1, 3)
+                        bilancio_sterzo -= 1  
+                urti_vicini += 1
+            # PRIORITÀ 4: EVITARE INCASTRI LATERALI
+            elif lsx < 15:
+                modalita_turbo = False
+                passi_totali = 0
+                passi_random=600
+                print(log_msg_stati+" -> Destra "+str(passi_random))
+                send_udp(sock, log_msg_stati+" -> Destra "+str(passi_random))
+                muovi_fisico(passi_random, 1, 0.6, 3) # Allontanati da SX
+            
+            elif ldx < 15:
+                modalita_turbo = False
+                passi_totali = 0
+                passi_random=600
+                print(log_msg_stati+" -> Sinistra "+str(passi_random))
+                send_udp(sock, log_msg_stati+" -> Sinistra "+str(passi_random))
+                muovi_fisico(passi_random, 0.6, 1, 3) # Allontanati da DX
+        
+            # PRIORITÀ 5: AVANTI TUTTA
+            else:
+                # Se non ci sono ostacoli da un po', ogni tanto fa una spirale
+                if urti_vicini == 0 and passi_totali % 10 == 0 and passi_totali > 0:
+                    print(log_msg_stati+" -> Spirale ")
+                    send_udp(sock, log_msg_stati+" -> Spirale ")
+                    manovra_spirale(sock,log_msg_stati)
+                # Avanzamento rettilineo compensato
+                corr_a = 1.0 if bilancio_sterzo <= 0 else 0.9
+                corr_b = 1.0 if bilancio_sterzo > 0 else 0.9
+                
+                v_marcia = 1 if modalita_turbo else 3
+                passi_da_fare = 1000 if not modalita_turbo else 2000
+                passi_random=1000
+                print(log_msg_stati+" -> Avanti  "+str(passi_random))
+                send_udp(sock, log_msg_stati+" -> Avanti "+str(passi_random))
+                muovi_fisico(passi_random, corr_a, corr_b, v_marcia)
+                
+                passi_totali += 1
+                if urti_vicini > 0: urti_vicini -= 1
 
-    except KeyboardInterrupt:
-        i2c.writeto(addr, b'\x00\x00')
-        print("\n[STOP] Robot spento.")
-        send_udp(sock,f"[STOP] Robot spento.")
-indirizzo_ip = connetti_wifi("briz", "Luca0001")
-print(f'Indirizzo IP Robot: { indirizzo_ip }')
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-send_udp(sock,f'Indirizzo ip del robot : {indirizzo_ip} ')
-send_udp(sock,f"Robot tagliaerba avviato e connesso al Wi-Fi!")
-esplora(sock)
+            # Gestione Turbo
+            modalita_turbo = True if urti_vicini == 0 and passi_totali > 10 else False
+            
+            time.sleep_ms(10)
+    except Exception as e:
+        print("Errore loop:", e)
+        send_udp(sock,"ERRORE LOOP: " + str(e))
+        i2c.writeto(addr, b'\x00\x00') # Ferma tutto in caso di errore
+
+try:
+    indirizzo_ip = connetti_wifi("briz", "Luca0001")
+    print(f'Indirizzo IP Robot: { indirizzo_ip }')
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    send_udp(sock,f'Indirizzo ip del robot : {indirizzo_ip} ')
+    send_udp(sock,f"Robot tagliaerba avviato e connesso al Wi-Fi!")
+    esplora(sock)
+except Exception as e:
+    print("Errore critico all'avvio:", e)
+    send_udp(sock,"ERRORE CRITICO ALL'AVVIO: " + str(e))    
