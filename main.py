@@ -246,7 +246,8 @@ def esplora(sock):
             # LOG AGGIORNATO (Corretto con FC e i due punti su FD)
             status = "TURBO" if modalita_turbo else "NORMAL"
             log_msg_stati=""
-            log_msg_stati = f"[{status}] sinistro:{lsx:2.0f}|Fronte sinistro:{fsx:2.0f}|Davanti:{fcent:2.0f}|Fronte destro:{fdx:2.0f}|destro:{ldx:2.0f} | B:{bilancio_sterzo} | P:{passi_totali} | UV:{urti_vicini}"
+            #log_msg_stati = f"[{status}] sinistro:{lsx:2.0f}|Fronte sinistro:{fsx:2.0f}|Davanti:{fcent:2.0f}|Fronte destro:{fdx:2.0f}|destro:{ldx:2.0f} | B:{bilancio_sterzo} | P:{passi_totali} | UV:{urti_vicini}"
+            log_msg_stati = f"{lsx:2.0f}|{fsx:2.0f}|{fcent:2.0f}|{fdx:2.0f}|{ldx:2.0f}|{bilancio_sterzo}|{passi_totali}|{urti_vicini}"
             #print(log_msg_stati)
             #send_udp(sock, log_msg_stati)
 
@@ -373,6 +374,7 @@ try:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     send_udp(sock,f'Indirizzo ip del robot : {indirizzo_ip} ')
     send_udp(sock,f"Robot tagliaerba avviato e connesso al Wi-Fi!")
+    send_udp(sock,f"[status] | [sinistro] | [Fronte sinistro] | [Davanti] | [Fronte destro] | [destro] | [bilancio_sterzo] | [passi_totali] | [urti_vicini] -> AZIONE ")
     esplora(sock)
 except Exception as e:
     print("Errore critico all'avvio:", e)
