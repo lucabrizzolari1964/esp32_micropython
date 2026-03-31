@@ -190,7 +190,7 @@ def muovi_fisico(passi, dir_a, dir_b, velocita=3):
         time.sleep_ms(velocita)
         
     # Spegnimento finale per non surriscaldare
-    i2c.writeto(addr, b'\x00\x00')
+    #i2c.writeto(addr, b'\x00\x00')
 
 
 
@@ -246,7 +246,7 @@ def esplora(sock):
             # LOG AGGIORNATO (Corretto con FC e i due punti su FD)
             status = "TURBO" if modalita_turbo else "NORMAL"
             log_msg_stati=""
-            log_msg_stati = f"[{status}] sinistro:{lsx:2.0f}|Fronte sinistro:{fsx:2.0f}|Davanti:{fcent:2.0f}|Fronte destro:{fdx:2.0f}|destro:{ldx:2.0f} | B:{bilancio_sterzo} P:{passi_totali} UV:{urti_vicini}"
+            log_msg_stati = f"[{status}] sinistro:{lsx:2.0f}|Fronte sinistro:{fsx:2.0f}|Davanti:{fcent:2.0f}|Fronte destro:{fdx:2.0f}|destro:{ldx:2.0f} | B:{bilancio_sterzo} | P:{passi_totali} | UV:{urti_vicini}"
             #print(log_msg_stati)
             #send_udp(sock, log_msg_stati)
 
@@ -263,41 +263,37 @@ def esplora(sock):
             elif fcent < 10: 
                 modalita_turbo = False
                 passi_totali = 0    
-                print(log_msg_stati+" -> Retromarcia")
-                send_udp(sock, log_msg_stati+" -> Retromarcia")
                 muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
                 fsx, fdx = leggi_distanza(0), leggi_distanza(1)
                 # Sceglie dove girare in base ai sensori diagonali e laterali
                 if fsx > fdx:
                         passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Sinistra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Sinistra passi "+str(passi_random))
+                        print(log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
                         muovi_fisico(passi_random, -1, 1, 3); bilancio_sterzo -= 1
                 else:
                         passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Destra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Destra passi "+str(passi_random))
+                        print(log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
                         muovi_fisico(passi_random, 1, -1, 3); bilancio_sterzo += 1
                 urti_vicini += 2
 
             elif fsx < 20 and fdx < 20 and fcent < 25:
                 modalita_turbo = False
                 passi_totali = 0    
-                passi_random = urandom.randint(1000, 3000)  
-                print(log_msg_stati+" -> Angolo Indietro passi "+str(passi_random))
-                send_udp(sock, log_msg_stati+" -> Angolo Indietro passi "+str(passi_random))
-                muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
+                passi_random = 1000
+                muovi_fisico(passi_random, -1, -1, 3) # Retromarcia per staccarsi dal muro
                 bilancio_sterzo += 1
                 fsx, fdx = leggi_distanza(0), leggi_distanza(1)
                 if lsx > ldx:
                         passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Sinistra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Sinistra passi "+str(passi_random))
+                        print(log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
                         muovi_fisico(passi_random, -1, 1, 3); bilancio_sterzo -= 1
                 else:
                         passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Destra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Destra passi "+str(passi_random))
+                        print(log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
+                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
                         muovi_fisico(passi_random, 1, -1, 3); bilancio_sterzo += 1
                 urti_vicini += 2
             
