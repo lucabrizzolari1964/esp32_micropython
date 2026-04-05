@@ -1,16 +1,28 @@
 {
   "version": 1,
-  "syncId": "bc1d58f4-750e-4472-9351-db73aacb3b43",
+  "syncId": "a3723756-6823-4b12-8d27-a3206d421ed1",
   "root": "/home/luca/micropython/sw",
-  "generatedAt": 1774967251750,
+  "generatedAt": 1775413573471,
   "files": {
+    "__init__.py": {
+      "size": 2448,
+      "mtime": 1775234387714
+    },
     "boot.py": {
       "size": 139,
-      "mtime": 1773936565834
+      "mtime": 1775234388624
     },
     "main.py": {
-      "size": 16028,
-      "mtime": 1774967245534
+      "size": 13047,
+      "mtime": 1775413571208
+    },
+    "qtable_mower.txt": {
+      "size": 1611,
+      "mtime": 1775248890967
+    },
+    "sw.code-workspace": {
+      "size": 60,
+      "mtime": 1775234393554
     }
   }
 }

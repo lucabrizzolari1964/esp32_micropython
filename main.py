@@ -5,36 +5,48 @@ import network
 import socket
 import os
 import gc
+import math
 
-#server di log
+
+#0: Avanti (Taglio)
+#1: Retromarcia e Destra (Manovra)
+#2: Destra (Rotazione)
+#3: Retromarcia e Sinistra (Manovra)
+#4: Sinistra (Rotazione)
+
+# --- CONFIGURAZIONE RETE ---
+SSID = "briz"
+PASSWORD = "Luca0001"
 SERVER_IP = "192.168.0.157" 
 SERVER_PORT = 5005
-indirizzo_ip=""
-log_msg_stati=""
 
+# --- CONFIGURAZIONE Q-LEARNING ---
+Q_TABLE_FILE = "qtable_mower.txt"
+AZIONI = 5  
+STATI = 64 
+LR = 0.2    
+GAMMA = 0.9 
+EPSILON_BASE = 0.15 
 
 # --- CONFIGURAZIONE HARDWARE ---
 i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=400000)
 addr = 0x20 
 
-# Pin Echo (Tutti su ESP32)
 echo_sx, echo_dx = Pin(18, Pin.IN), Pin(19, Pin.IN)
 echo_sotto = Pin(5, Pin.IN)
 echo_lat_sx, echo_lat_dx = Pin(32, Pin.IN), Pin(33, Pin.IN)
-#sensore centrale 
-echo_centrale = Pin(35, Pin.IN)
-# Pin Trigger Laterali (Diretti su ESP32 per liberare l'expander)
-trig_lat_sx = Pin(25, Pin.OUT)
-trig_lat_dx = Pin(26, Pin.OUT) 
+echo_dietro = Pin(35, Pin.IN) 
+trig_lat_sx, trig_lat_dx = Pin(25, Pin.OUT), Pin(26, Pin.OUT) 
+button, led = Pin(23, Pin.IN, Pin.PULL_UP), Pin(2, Pin.OUT)
 
-button = Pin(23, Pin.IN, Pin.PULL_UP)
-led = Pin(2, Pin.OUT)
-
-# Sequenze Motori (8 fasi - Passo Passo)
 seq_a = [0x01, 0x03, 0x02, 0x06, 0x04, 0x0C, 0x08, 0x09]
 seq_b = [0x10, 0x30, 0x20, 0x60, 0x40, 0xC0, 0x80, 0x90]
 
-# Configura il Wi-Fi
+lsx, ldx = 0, 0
+fsx, fdx = 0, 0
+
+
+# --- TUA FUNZIONE CONNETTI_WIFI ORIGINALE ---
 def connetti_wifi(ssid, password):
     wlan = network.WLAN(network.STA_IF)
     if wlan.active():
@@ -44,7 +56,8 @@ def connetti_wifi(ssid, password):
         wlan.active(True) # Riattiva in modo pulito
     except OSError as e:
         print("Errore critico Wi-Fi, riavvio del robot...")
-        machine.reset() # Se l'errore persiste, l'unica è il reboot hardware
+        import machine
+        machine.reset() 
     
     if not wlan.isconnected():
         print(f'Connessione a {ssid}...')
@@ -58,324 +71,275 @@ def connetti_wifi(ssid, password):
             print(".", end="")
             
     if wlan.isconnected():
-        # Prende i dati della configurazione (IP, Subnet, Gateway, DNS)
         config = wlan.ifconfig()
         print('\n--- Connessione Riuscita! ---')
-        print(f'Indirizzo IP Robot: {config[0]}') # Questo è l'IP da usare in VS Code
+        print(f'Indirizzo IP Robot: {config[0]}') 
         print(f'Subnet Mask:      {config[1]}')
         print(f'Gateway:          {config[2]}')
         print('-----------------------------\n')
-        print(f'Indirizzo IP Robot : { indirizzo_ip} ')
         return config[0]
     else:
         print('\nErrore: Impossibile connettersi al Wi-Fi.')
         return None
 
-def send_udp(sock,message):
-    # 1. Creazione del socket UDP (AF_INET per IPv4, SOCK_DGRAM per UDP)
-    #sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        #print(f"Invio messaggio {message} {SERVER_IP}:{SERVER_PORT}...")
-        sock.sendto(message.encode(), (SERVER_IP, SERVER_PORT))
-        #print("Messaggio inviato correttamente.")
-        
-    except Exception as e:
-        print("ERRORE ERRORE Errore durante l'invio:", e)    
-    #finally:
-        # 3. Chiusura del socket per liberare risorse
-    #    sock.close()
+# --- FUNZIONI DI SUPPORTO ---
+def send_debug(sock, tag, message):
+    msg = f"[{time.ticks_ms()}] {tag}: {message}"
+    print(msg)
+    try: sock.sendto(msg.encode(), (SERVER_IP, SERVER_PORT))
+    except: pass
 
-# --- FUNZIONI DI LETTURA E MOVIMENTO ---
+def carica_q_table():
+    if Q_TABLE_FILE in os.listdir():
+        try:
+            with open(Q_TABLE_FILE, "r") as f:
+                return [[float(x) for x in line.strip().split(",")] for line in f]
+        except: pass
+    return [[0.0 for _ in range(AZIONI)] for _ in range(STATI)]
 
-def leggi_distanza(sensore):
-    """ 0:F_SX, 1:F_DX, 2:SOTTO, 3:L_SX, 4:L_DX, 5:F_CENTRALE """
-    # Sensori su Expander I2C (0, 1, 2 e il nuovo 5 su P7)
-    if sensore <= 2 or sensore == 5:
-        # Se sensore è 5 usa 0x80 (P7), altrimenti usa la lista per 0,1,2
-        trig_bit = 0x80 if sensore == 5 else [0x10, 0x20, 0x40][sensore]
-        e_pin = echo_centrale if sensore == 5 else [echo_sx, echo_dx, echo_sotto][sensore]
-        
-        i2c.writeto(addr, bytes([trig_bit, 0x00]))
-        time.sleep_us(10)
-        i2c.writeto(addr, bytes([0x00, 0x00]))
-    
-    # Sensori con Trigger diretto su ESP32 (3 e 4)
-    else:
-        t_pin, e_pin = (trig_lat_sx, echo_lat_sx) if sensore == 3 else (trig_lat_dx, echo_lat_dx)
-        t_pin.value(1)
-        time.sleep_us(10)
-        t_pin.value(0)
-    
-    durata = time_pulse_us(e_pin, 1, 25000)
-    return 400 if durata < 0 else (durata / 2) / 29.1
+def salva_q_table(table):
+    with open(Q_TABLE_FILE, "w") as f:
+        for row in table:
+            f.write(",".join([str(x) for x in row]) + "\n")
 
 
-def get_distanza_filtrata(sensore, campioni=5):
+#--- SENSORI E MOVIMENTO ---
+def leggi_distanza(sensore, campioni=3):
     letture = []
     
     for _ in range(campioni):
-        # --- TUA LOGICA ORIGINALE (Leggermente ottimizzata) ---
+        # Logica originale per attivare il trigger
         if sensore <= 2 or sensore == 5:
             trig_bit = 0x80 if sensore == 5 else [0x10, 0x20, 0x40][sensore]
-            e_pin = echo_centrale if sensore == 5 else [echo_sx, echo_dx, echo_sotto][sensore]
+            e_pin = echo_dietro if sensore == 5 else [echo_sx, echo_dx, echo_sotto][sensore]
             i2c.writeto(addr, bytes([trig_bit, 0x00]))
             time.sleep_us(10)
             i2c.writeto(addr, bytes([0x00, 0x00]))
         else:
             t_pin, e_pin = (trig_lat_sx, echo_lat_sx) if sensore == 3 else (trig_lat_dx, echo_lat_dx)
-            t_pin.value(1)
-            time.sleep_us(10)
-            t_pin.value(0)
+            t_pin.value(1); time.sleep_us(10); t_pin.value(0)
         
-        durata = time_pulse_us(e_pin, 1, 25000)
-        dist = 400 if durata < 0 else (durata / 2) / 29.1
-        letture.append(dist)
-        #print(f"Distanza letta dal sensore {sensore}: {dist} cm")   
-        time.sleep_ms(5) # Breve pausa tra i campioni per evitare interferenze dell'eco precedente
+        durata = time_pulse_us(e_pin, 1, 20000)
+        
+        # Invece di 400 subito, salviamo solo letture valide
+        if durata > 0:
+            dist = (durata / 2) / 29.1
+            letture.append(dist)
+        
+        time.sleep_ms(5) # Breve pausa per evitare interferenze tra i segnali
 
-    # --- FILTRO MEDIANO ---
-    # Ordina le letture e prendi quella centrale (scarta i picchi da riflessione)
-    letture.sort()
-    distanza_finale = letture[len(letture) // 2]
+    # Logica di filtraggio
+    if not letture:
+        return 400 # Se falliscono tutte, allora è fuori portata
     
-    return distanza_finale
+    # Ritorna la media delle letture valide (più stabile)
+    return sum(letture) / len(letture)
 
 
-
-
-def rileva_terreno():
-    """ Analizza la stabilità per distinguere erba/cemento """
-    letture = []
-    for _ in range(4):
-        d = leggi_distanza(2)
-        if d < 400: letture.append(d)
-        time.sleep_ms(15) 
-    if not letture: return "Errore"
-    diff = max(letture) - min(letture)
-    return "Cemento" if diff < 1 else "Erba"
-
-def muovi_fisico(passi, dir_a, dir_b, velocita=3):
+def muovi_sicuro(passi, dir_a, dir_b, sensore_stop=None, soglia=15, sock=None, freqSensori=40):
     idx_a, idx_b = 0, 0
-    # Usiamo dei contatori decimali per decidere quando muovere il motore
     acc_a, acc_b = 0.0, 0.0
+    for i in range(passi):
+        if i % freqSensori == 0 and sensore_stop is not None:
+            if leggi_distanza(sensore_stop) < soglia:
+                i2c.writeto(addr, b'\x00\x00')
+                if sock: send_debug(sock, "HALT", f"Stop d'emergenza sensore {sensore_stop}!")
+                return False 
+        acc_a += abs(dir_a); acc_b += abs(dir_b)
+        bl, bh = 0, 0
+        if acc_a >= 1.0: bl = seq_a[idx_a]; idx_a = (idx_a + (1 if dir_a>0 else -1)) % 8; acc_a -= 1.0
+        if acc_b >= 1.0: bh = seq_b[idx_b]; idx_b = (idx_b + (1 if dir_b>0 else -1)) % 8; acc_b -= 1.0
+        i2c.writeto(addr, bytes([bl, bh]))
+        time.sleep_ms(2)
+    return True
+
+
+def analizza_terreno(sock,sensore_sotto, campioni=12):
+    letture = []
+    fuori_portata = 0
+    send_debug(sock, "DEBUG", f"Analisi terreno: raccolgo {campioni} campioni dal sensore sotto...")
+    for _ in range(campioni):
+        d = leggi_distanza(sensore_sotto)
+        if d < 400:
+            letture.append(d)
+        else:
+            fuori_portata += 1
+        time.sleep_ms(8) # Leggermente più veloce
     
-    # Portiamo le direzioni a valori assoluti per la logica di salto
-    abs_a, abs_b = abs(dir_a), abs(dir_b)
-    # Segno della direzione (1 o -1)
-    sgn_a = 1 if dir_a > 0 else -1
-    sgn_b = 1 if dir_b > 0 else -1
+    # Caso A: Troppi fuori portata (il robot è sollevato o su un buco)
+    if fuori_portata > (campioni / 2):
+        return "PERICOLO_VUOTO", 99.0
 
-    for _ in range(passi):
-        # 1. Accumuliamo la "velocità" richiesta
-        acc_a += abs_a
-        acc_b += abs_b
-        
-        # 2. Decidiamo quali bit inviare (default 0 = fermo)
-        b_low, b_high = 0, 0
-        
-        # Se l'accumulatore supera 1, muoviamo il motore A
-        if acc_a >= 1.0:
-            b_low = seq_a[idx_a]
-            idx_a = (idx_a + sgn_a) % 8
-            acc_a -= 1.0 # Reset dell'accumulatore
-            
-        # Se l'accumulatore supera 1, muoviamo il motore B
-        if acc_b >= 1.0:
-            b_high = seq_b[idx_b]
-            idx_b = (idx_b + sgn_b) % 8
-            acc_b -= 1.0 # Reset dell'accumulatore
-
-        # 3. Invio il comando combinato
-        i2c.writeto(addr, bytes([b_low, b_high]))
-        time.sleep_ms(velocita)
-        
-    # Spegnimento finale per non surriscaldare
-    #i2c.writeto(addr, b'\x00\x00')
-
-
-
-# --- LOGICA AI AVANZATA ---
-
-def manovra_spirale(sock,log_msg_stati):
-    # Crea 5 cerchi concentrici sempre più larghi
-    for raggio in range(2, 7):
-        # Il motore esterno (SX) gira più del motore interno (DX)
-        # Il coefficiente (0.15 * raggio) allarga la curva gradualmente
-        print(log_msg_stati+" -> Spirale "+str(300 * raggio))
-        send_udp(sock, log_msg_stati+" -> Spirale "+str(300 * raggio))
-        muovi_fisico(300 * raggio, 1, 0.15 * raggio, 1)
-        # Sicurezza: se vede un ostacolo durante la spirale, interrompe subito
-        fsx, fdx = leggi_distanza(0), leggi_distanza(1)
-        fcent = leggi_distanza(5)
-        lsx, ldx = leggi_distanza(3), leggi_distanza(4)
-        if fsx < 20 or fdx < 20 or (lsx < 20 or ldx < 20 or fcent < 20):
-            print(log_msg_stati+" -> Spirale Esco ")
-            send_udp(sock, log_msg_stati+" -> Spirale Esco ")
-            modalita_turbo = False  
-            break
-
-def esplora(sock):
-    print("\n" + "="*70)
-    print("FUNC ESPLORA ROBOT TAGLIAERBA LUCA V 1.0- 5 SENSORI ATTIVI" + "="*30)
-    send_udp(sock, "FUNC ESPLORA ROBOT TAGLIAERBA V 1.0 LUCA AVVIATO!")
-    print("="*70)
+    # Caso B: Dati insufficienti
+    if len(letture) < 3: 
+        return "Ignoto", 0
     
-    urti_vicini = 0
-    passi_totali = 0
-    bilancio_sterzo = 0  # + = troppe DX, - = troppe SX
-    modalita_turbo = False
+    media = sum(letture) / len(letture)
+    varianza = sum((x - media) ** 2 for x in letture) / len(letture)
+    deviazione = math.sqrt(varianza)
     
-    try:
-        while True:
-            # 1. GESTIONE TERRENO (Pulsante Pin 23)
-            tipo_terreno = "Erba"
-            dist_sotto = 0
-            if button.value() == 0:
-                led.value(1)
-                tipo_terreno = rileva_terreno()
-                dist_sotto = leggi_distanza(2)
-            else:
-                led.value(0)
-
-            # 2. LETTURA RADAR COMPLETO (Incluso il nuovo FC)
-            #fsx, fdx = leggi_distanza(0), leggi_distanza(1)
-            fsx, fdx = get_distanza_filtrata(0, 5), get_distanza_filtrata(1, 5)
-            fcent = leggi_distanza(5) # <--- NUOVA LETTURA CENTRALE
-            lsx, ldx = leggi_distanza(3), leggi_distanza(4)
-
-            # LOG AGGIORNATO (Corretto con FC e i due punti su FD)
-            status = "TURBO" if modalita_turbo else "NORMAL"
-            log_msg_stati=""
-            #log_msg_stati = f"[{status}] sinistro:{lsx:2.0f}|Fronte sinistro:{fsx:2.0f}|Davanti:{fcent:2.0f}|Fronte destro:{fdx:2.0f}|destro:{ldx:2.0f} | B:{bilancio_sterzo} | P:{passi_totali} | UV:{urti_vicini}"
-            log_msg_stati = f"{lsx:2.0f}|{fsx:2.0f}|{fcent:2.0f}|{fdx:2.0f}|{ldx:2.0f}|{bilancio_sterzo}|{passi_totali}|{urti_vicini}"
-            #print(log_msg_stati)
-            #send_udp(sock, log_msg_stati)
-
-            # 3. LOGICA DECISIONALE AGGIORNATA
-            
-            # PRIORITÀ 1: CEMENTO O VUOTO
-            if tipo_terreno == "Cemento" or dist_sotto > 18:
-                print(f"[AI] ALLERTA: {tipo_terreno}! Indietro.")
-                muovi_fisico(300, -1, -1, 3)
-                muovi_fisico(5000, 1, -1, 3)
-                bilancio_sterzo += 1
-
-            # PRIORITÀ 2: OSTACOLO CENTRALE (Nuova logica)
-            elif fcent < 10: 
-                modalita_turbo = False
-                passi_totali = 0    
-                muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
-                fsx, fdx = leggi_distanza(0), leggi_distanza(1)
-                # Sceglie dove girare in base ai sensori diagonali e laterali
-                if fsx > fdx:
-                        passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
-                        muovi_fisico(passi_random, -1, 1, 3); bilancio_sterzo -= 1
-                else:
-                        passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
-                        muovi_fisico(passi_random, 1, -1, 3); bilancio_sterzo += 1
-                urti_vicini += 2
-
-            elif fsx < 20 and fdx < 20 and fcent < 25:
-                modalita_turbo = False
-                passi_totali = 0    
-                passi_random = 1000
-                muovi_fisico(passi_random, -1, -1, 3) # Retromarcia per staccarsi dal muro
-                bilancio_sterzo += 1
-                fsx, fdx = leggi_distanza(0), leggi_distanza(1)
-                if lsx > ldx:
-                        passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Sinistra passi "+str(passi_random))
-                        muovi_fisico(passi_random, -1, 1, 3); bilancio_sterzo -= 1
-                else:
-                        passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Destra passi "+str(passi_random))
-                        muovi_fisico(passi_random, 1, -1, 3); bilancio_sterzo += 1
-                urti_vicini += 2
-            
-               # PRIORITÀ 3: OSTACOLI DIAGONALI (SX o DX)
-
-            elif fsx < 20 or fdx < 20:
-                if fsx < fdx: 
-                        modalita_turbo = False  
-                        passi_totali = 0
-                        passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Retromarcia 1000 e Destra "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Retromarcia 1000 e Destra "+str(passi_random))
-                        muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
-                        muovi_fisico(passi_random, 1, -1, 3)
-                        bilancio_sterzo += 1
-                        
-                else:
-                        modalita_turbo = False
-                        passi_totali = 0
-                        passi_random = urandom.randint(2000, 8000)
-                        print(log_msg_stati+" -> Retromarcia 1000 e Sinistra "+str(passi_random))
-                        send_udp(sock, log_msg_stati+" -> Retromarcia e Sinistra "+str(passi_random))
-                        muovi_fisico(1000, -1, -1, 3) # Retromarcia per staccarsi dal muro
-                        muovi_fisico(passi_random, -1, 1, 3)
-                        bilancio_sterzo -= 1  
-                urti_vicini += 1
-            # PRIORITÀ 4: EVITARE INCASTRI LATERALI
-            elif lsx < 15:
-                modalita_turbo = False
-                passi_totali = 0
-                passi_random=600
-                print(log_msg_stati+" -> Destra "+str(passi_random))
-                send_udp(sock, log_msg_stati+" -> Destra "+str(passi_random))
-                muovi_fisico(passi_random, 1, 0.6, 3) # Allontanati da SX
-            
-            elif ldx < 15:
-                modalita_turbo = False
-                passi_totali = 0
-                passi_random=600
-                print(log_msg_stati+" -> Sinistra "+str(passi_random))
-                send_udp(sock, log_msg_stati+" -> Sinistra "+str(passi_random))
-                muovi_fisico(passi_random, 0.6, 1, 3) # Allontanati da DX
+    # LOGICA DI SOGLIA (Sperimentale)
+    # Se la media è molto alta (> 15cm), forse non è erba ma il robot si è alzato
+    if media > 15:
+        tipo = "Sollevato"
+    else:
+        # L'erba assorbe/riflette male l'ultrasuono -> alta deviazione
+        tipo = "Erba" if deviazione > 1.8 else "Cemento"
         
-            # PRIORITÀ 5: AVANTI TUTTA
-            else:
-                # Se non ci sono ostacoli da un po', ogni tanto fa una spirale
-                if urti_vicini == 0 and passi_totali % 10 == 0 and passi_totali > 0:
-                    print(log_msg_stati+" -> Spirale ")
-                    send_udp(sock, log_msg_stati+" -> Spirale ")
-                    manovra_spirale(sock,log_msg_stati)
-                # Avanzamento rettilineo compensato
-                corr_a = 1.0 if bilancio_sterzo <= 0 else 0.9
-                corr_b = 1.0 if bilancio_sterzo > 0 else 0.9
-                
-                v_marcia = 1 if modalita_turbo else 3
-                passi_da_fare = 1000 if not modalita_turbo else 2000
-                passi_random=1000
-                print(log_msg_stati+" -> Avanti  "+str(passi_random))
-                send_udp(sock, log_msg_stati+" -> Avanti "+str(passi_random))
-                muovi_fisico(passi_random, corr_a, corr_b, v_marcia)
-                
-                passi_totali += 1
-                if urti_vicini > 0: urti_vicini -= 1
+    return tipo, deviazione
 
-            # Gestione Turbo
-            modalita_turbo = True if urti_vicini == 0 and passi_totali > 10 else False
-            
-            time.sleep_ms(10)
-    except Exception as e:
-        print("Errore loop:", e)
-        send_udp(sock,"ERRORE LOOP: " + str(e))
-        i2c.writeto(addr, b'\x00\x00') # Ferma tutto in caso di errore
 
-try:
-    indirizzo_ip = connetti_wifi("briz", "Luca0001")
-    print(f'Indirizzo IP Robot: { indirizzo_ip }')
+
+def get_stato_completo(sock):
+    global lsx, ldx, fsx, fdx
+    lsx, ldx = leggi_distanza(3), leggi_distanza(4)
+    fsx, fdx = leggi_distanza(0), leggi_distanza(1)
+    dietro = leggi_distanza(5)
+    
+    
+    #l_t = [leggi_distanza(2) for _ in range(3)]
+    #leggo 3 volte il sensore sotto per avere una stima più stabile del tipo di terreno (Cemento vs Erba)
+    #diff = max(l_t) - min(l_t)
+
+    if button.value() == 0:
+        led.value(1)
+        tipo_t = "Erba"
+        dev = 0.0
+        send_debug(sock, "MODE", "Modalità Manuale: Forza ERBA (Pulsante attivo)")
+    else:
+        led.value(0)
+        # Se il pulsante non è premuto, analizza il terreno normalmente
+        tipo_t, dev = analizza_terreno(sock,2, campioni=10)
+
+    #tipo_t = "Cemento" if (button.value()==0 and diff < 1.2) else "Erba"
+   
+    
+    # Mappatura a 6 bit (0-63) - STATI deve essere 64
+    idx = ((1 if tipo_t == "Cemento" else 0) << 5) | \
+      ((1 if dietro < 25 else 0)       << 4) | \
+      ((1 if lsx < 25 else 0)          << 3) | \
+      ((1 if fsx < 25 else 0)          << 2) | \
+      ((1 if fdx < 25 else 0)          << 1) | \
+      ((1 if ldx < 25 else 0)          << 0)
+    send_debug(sock, "DEBUG", f"letture : Tipo Terreno: {tipo_t} Deviazione: {dev:.2f}")
+    send_debug(sock, "SCAN", f"B:{dietro:2.0f} T:{tipo_t} L:{lsx:2.0f} FS:{fsx:2.0f} FD:{fdx:2.0f} R:{ldx:2.0f} ")
+    send_debug(sock, "DEBUG", f"idx: {idx} (bin: {bin(idx)})")
+
+    return idx, tipo_t, dietro
+
+# ... (Parti iniziali, import e setup hardware rimangono uguali) ...
+
+def main():
+    connetti_wifi(SSID, PASSWORD)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    send_udp(sock,f'Indirizzo ip del robot : {indirizzo_ip} ')
-    send_udp(sock,f"Robot tagliaerba avviato e connesso al Wi-Fi!")
-    send_udp(sock,f"[status] | [sinistro] | [Fronte sinistro] | [Davanti] | [Fronte destro] | [destro] | [bilancio_sterzo] | [passi_totali] | [urti_vicini] -> AZIONE ")
-    esplora(sock)
-except Exception as e:
-    print("Errore critico all'avvio:", e)
-    send_udp(sock,"ERRORE CRITICO ALL'AVVIO: " + str(e))    
+    q_table = carica_q_table()
+    passi_in_stallo = 0
+    ultimo_stato = -1
+    passi_totali = 0
+    
+    send_debug(sock, "SYSTEM", f"--- ROBOT ONLINE: PASSI LUNGHI + CLIPPING --- Cerca Cemento {button.value()} ---")
+
+    while True:
+        send_debug(sock, "DEBUG", "-------------------- Nuovo Ciclo --------------------------")    
+        s_att, terr_att, d_dietro_att = get_stato_completo(sock)
+        send_debug(sock, "SCAN", f"SENSORI L:{lsx:2.0f} FS:{fsx:2.0f} FD:{fdx:2.0f} R:{ldx:2.0f} ")
+        if s_att == ultimo_stato and s_att != 0:
+            passi_in_stallo += 1
+            send_debug(sock, "WARNING", f"Stallo! Contatore: {passi_in_stallo}")
+        else:
+            passi_in_stallo = 0
+        ultimo_stato = s_att
+        send_debug(sock, "DEBUG", f"q_table : {q_table}")
+        send_debug(sock, "DEBUG", f"q_table[{s_att}] : {q_table[s_att]}")
+        eps = 0.5 if passi_in_stallo > 3 else EPSILON_BASE
+        #if urandom.random() < eps:
+        #    azione = urandom.randint(0, 4)
+        #    send_debug(sock, "BRAIN", f"Esploro (Eps:{eps:.2f})")
+        #else:
+        #    azione = q_table[s_att].index(max(q_table[s_att]))
+        #    send_debug(sock, "BRAIN", f"Q-Best (Val:{max(q_table[s_att]):.2f}) Azione: {azione}")
+        
+        if fsx > 40 and fdx > 40 and lsx > 40 and ldx > 40 and d_dietro_att > 30:
+            azione = 0  # Supponendo 0 = Avanti Veloce
+            print("STRADA LIBERA: FS:{} FD:{} L:{} R:{} D:{} -> Vado dritto!".format(fsx, fdx, lsx, ldx, d_dietro_att))
+            send_debug(sock, "DEBUG", "STRADA LIBERA: FS:{} FD:{} L:{} R:{} D:{} -> Vado dritto!".format(fsx, fdx, lsx, ldx, d_dietro_att))
+
+        # 3. SE C'È UN OSTACOLO (< 40cm), SCEGLI COSA FARE
+        else:
+             if urandom.random() < eps: 
+                 azione = urandom.randint(0, 4)
+                 print("OSTACOLO! Provo azione casuale:", azione)
+             else:
+                 # Altrimenti usa la Q-Table (Memoria)
+                 azione = q_table[s_att].index(max(q_table[s_att]))
+                 send_debug(sock, "BRAIN", f"Q-Best (Val:{max(q_table[s_att]):.2f}) Azione: {azione}")
+
+        if (s_att & 0b011110): 
+            if urandom.random() < 0.3: # 30% di probabilità
+                azione = urandom.choice([2, 4]) # Forza azione 2 (DX) o 4 (SX)
+                send_debug(sock, "BRAIN", "FORZA ROTAZIONE ANTI-ANGOLO")
+
+        # --- MODIFICA PASSI AZIONE 0 (AVANTI) ---
+        if azione == 0: 
+            # Aumentato a 1000 passi per tagliare molto più prato!
+            # Controlla il sensore FS (0) ogni 40 passi.
+            successo = muovi_sicuro(1000, 1, 1, 0, 18, sock,300) 
+        elif azione == 1: 
+            passi_random = urandom.randint(800, 1600)
+            successo = muovi_sicuro(passi_random, -1, -1, 5, 15, sock) 
+            passi_random = urandom.randint(800, 1600)
+            if successo: muovi_sicuro(passi_random, 1, -1)
+        elif azione == 2: 
+            passi_random = urandom.randint(800, 1600)
+            send_debug(sock, "ACT", f"Rotazione DX Random: {passi_random}")
+            successo = muovi_sicuro(passi_random, 1, -1)
+        elif azione == 3: 
+            passi_random = urandom.randint(800, 1600)
+            successo = muovi_sicuro(passi_random, -1, -1, 5, 15, sock)
+            passi_random = urandom.randint(800, 1600)
+            if successo: muovi_sicuro(passi_random, -1, 1)
+        elif azione == 4: 
+            passi_random = urandom.randint(800, 1600)
+            send_debug(sock, "ACT", f"Rotazione SX Random: {passi_random}")
+            successo = muovi_sicuro(passi_random, -1, 1)
+        reward = 0
+        s_nuovo, terr_nuovo, d_dietro_nuovo = get_stato_completo(sock)
+        if s_att == s_nuovo and s_att != 0:
+           reward = -50 # Punizione perché sei rimasto incastrato!
+           send_debug(sock, "REWARD", "Punizione: Sei ancora incastrato!")
+           
+        # 3. Premio per il movimento (Incentivo)
+        if successo:
+          if azione == 0:
+             reward += 20  # Alziamo a 20 per dare ancora più priorità all'avanti
+          else:
+             reward += 2   # Piccolo premio se si è mosso ma non dritto
+        else:
+          reward -= 100     # Punizione grave se ha sbattuto (successo = False)
+        send_debug(sock, "DEBUG", f"Premio per il movimento:{reward} (Successo: {successo})")
+        # 4. Aggiungo un piccolo bonus se la strada davanti è libera
+        if fsx > 50 and fdx > 50 and azione == 0:
+            reward += 10 
+        
+        if (s_att & 0b011111) and (s_nuovo & 0b011111) == 0:
+            reward += 40
+            send_debug(sock, "BRAIN", "BONUS: LIBERATO!")
+
+        # --- BELLMAN UPDATE 
+        q_table[s_att][azione] += LR * (reward + GAMMA * max(q_table[s_nuovo]) - q_table[s_att][azione])
+
+        # normalizzo
+        if q_table[s_att][azione] > 50: q_table[s_att][azione] = 50
+        elif q_table[s_att][azione] < -50: q_table[s_att][azione] = -50
+
+        send_debug(sock, "UPDATE", f"Az:{azione} Rew:{reward} -> Q:{q_table[s_att][azione]:.1f}")
+
+        passi_totali += 1
+        if passi_totali % 20 == 0:
+            salva_q_table(q_table)
+            send_debug(sock, "STORAGE", "Salvataggio Flash effettuato.")
+            
+        gc.collect()
+
+if __name__ == "__main__":
+    main()

@@ -18,6 +18,12 @@
     "depth": 0
   },
   {
+    "fullPath": "/qtable_mower.txt",
+    "name": "qtable_mower.txt",
+    "isDir": false,
+    "depth": 0
+  },
+  {
     "fullPath": "/sw.code-workspace",
     "name": "sw.code-workspace",
     "isDir": false,
